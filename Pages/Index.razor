@@ -1,0 +1,162 @@
+﻿@page "/"
+@using System.Collections.ObjectModel
+@using System.Text
+@using System.Diagnostics
+@using Microsoft.Extensions.DependencyInjection;
+@using Microsoft.Extensions.Hosting;
+@using PnP.Core.Auth;
+@using PnP.Core.Model.SharePoint;
+@using PnP.Core.Services;
+@using System.Web
+@using System.Text.RegularExpressions;
+
+<PageTitle>Index</PageTitle>
+<label for="clientid" style="width:100px;">Client ID:</label>
+<input id="clientid" style="width:500px;" @bind=clientid />
+<br />
+<br />
+<label for="source" style="width:100px;">Source Site:</label>
+<input id="source" style="width:500px;" @bind=source />
+<br />
+<label for="dest" style="width:100px;">Dest Site:</label>
+<input id="dest" style="width:500px;" @bind=dest />
+<br />
+<br />
+<button @onclick="Execute">Execute</button>
+<br />
+<br />
+<div>
+  @((MarkupString)Regex.Replace(
+    HttpUtility.HtmlEncode(@OutPut), "\r?\n|\r", "<br />"))
+</div>
+@code
+{
+    private string clientid = string.Empty;
+    private string Title = string.Empty;
+    private string dest = string.Empty;
+    private string source = string.Empty;
+    private string OutPut = string.Empty;
+
+    protected override void OnInitialized()
+    {
+        clientid = "d38da960-0574-4a1d-8d40-7c5624f5f23f";
+        source = "https://0dhnc.sharepoint.com/sites/TEST1Hub1";
+        dest = "https://0dhnc.sharepoint.com/sites/TestHub2";
+    }
+
+    private async void Execute()
+    {
+        try
+        {
+            List<Nav> navs = new List<Nav>();
+
+            OutPut += "Prompting Login" + Environment.NewLine;
+            this.StateHasChanged();
+
+            // Creates and configures the host
+            var host = Host.CreateDefaultBuilder()
+                .ConfigureServices((context, services) =>
+                {
+                // Add PnP Core SDK
+                    services.AddPnPCore(options =>
+                    {
+                    // Configure the interactive authentication provider as default
+                        options.DefaultAuthenticationProvider = new InteractiveAuthenticationProvider()
+                            {
+                                ClientId = clientid,
+                                RedirectUri = new Uri("http://localhost")
+                            };
+                    });
+                })
+                .UseConsoleLifetime()
+                .Build();
+
+            // Start the host
+            await host.StartAsync();
+
+            using (var scope = host.Services.CreateScope())
+            {
+                // Ask an IPnPContextFactory from the host
+                var pnpContextFactory = scope.ServiceProvider.GetRequiredService<IPnPContextFactory>();
+
+
+
+                // Create a PnPContext
+                using (var context_source = await pnpContextFactory.CreateAsync(new Uri(source)))
+                {
+                    await context_source.Web.Navigation.LoadAsync(n => n.TopNavigationBar);
+
+                    var nodes = context_source.Web.Navigation.TopNavigationBar;
+                    OutPut += "Copying Source Navigation" + Environment.NewLine;
+                    this.StateHasChanged();
+
+                    foreach (PnP.Core.Model.SharePoint.INavigationNode node in nodes.RequestedItems)
+                    {
+                        var children = await node.GetChildNodesAsync();
+                        navs.Add(new Nav() { title = node.Title, url = node.Url, children = children, parentNode = node });
+                    }
+                }
+            }
+
+            using (var scope = host.Services.CreateScope())
+            {
+                // Ask an IPnPContextFactory from the host
+                var pnpContextFactory = scope.ServiceProvider.GetRequiredService<IPnPContextFactory>();
+
+
+                // Create a PnPContext
+                using (var context_dest = await pnpContextFactory.CreateAsync(new Uri(dest)))
+                {
+                    await context_dest.Web.Navigation.LoadAsync(n => n.TopNavigationBar);
+
+                    var nodes = context_dest.Web.Navigation.TopNavigationBar;
+
+                    OutPut += "Deleting Destination Navigation" + Environment.NewLine;
+                    this.StateHasChanged();
+
+                    await context_dest.Web.Navigation.TopNavigationBar.DeleteAllNodesAsync();
+
+                    OutPut += "Pasting Destination Navigation" + Environment.NewLine;
+                    this.StateHasChanged();
+
+                    foreach (Nav nav in navs)
+                    {
+                        var parentNode = await context_dest.Web.Navigation.TopNavigationBar.AddAsync(new NavigationNodeOptions { Title = nav.title, Url = nav.url });
+
+                        foreach(INavigationNode cnav in nav.children)
+                        {
+                            var childNode = await context_dest.Web.Navigation.TopNavigationBar.AddAsync(new NavigationNodeOptions { Title = cnav.Title, Url = cnav.Url, ParentNode = parentNode});
+
+                        }
+                    }
+                }
+
+                OutPut += "Completed";
+                this.StateHasChanged();
+            }
+            }
+    catch (Exception ex)
+        {
+            string a = ex.Message;
+        }
+    }
+
+    //string a = node.Title;
+
+    //var childNode = await context.Web.Navigation.TopNavigationBar.AddAsync(new NavigationNodeOptions
+    //    {
+    //        Title = $"\U0001f911‍♀️ Money",
+    //        Url = context.Uri.AbsoluteUri,
+    //        ParentNode = node
+    //    });
+
+    //goto reload;
+
+    private class Nav
+    {
+        public string title { get; set; }
+        public string url { get; set; }
+        public INavigationNode parentNode { get; set; }
+        public List<INavigationNode> children { get; set; }
+    }
+    }
